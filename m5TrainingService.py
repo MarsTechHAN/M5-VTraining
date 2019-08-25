@@ -10,6 +10,9 @@ import zipfile
 
 from PIL import Image
 
+os.environ["TF_KERAS"] = "1"
+
+
 import tensorflow as tf
 import numpy as np
 
@@ -39,6 +42,8 @@ from tensorflow.python.keras.utils import multi_gpu_model
 from tensorflow.python.keras import callbacks
 from tensorflow.python.keras.callbacks import History
 
+from keras_radam import RAdam
+
 import oss2
 
 import smtplib
@@ -55,10 +60,10 @@ aliyunOSSAddress = 'Meowmeowmeow'
 localSSDLoc = 'Meowmeowmeow'
 nncaseLoc = 'Meowmeowmeow'
 
-senderAddr = "Meowmeowmeow" 
+senderAddr = "Meowmeowmeow"
 senderPass = "Meowmeowmeow"
 
-bootFileName = "boot.py"
+bootFileName = "Meowmeowmeow"
 
 def getDataset(address, uuid):
     try:
@@ -70,26 +75,6 @@ def getDataset(address, uuid):
         return(0, f"{localSSDLoc}dataset_tmp/{uuid}_dataset")
     except Exception as e:
         return(-1, f"Failed to fetch the dataset, dut to {e}")
-
-
-def chkWaterMark(filename, magic):
-    m = hashlib.sha256()
-    m.update(str.encode(f"{magic} is super cool!"))
-
-    try:
-        fsize = os.path.getsize(filename)
-        f = open(filename, 'rb')
-        f.seek(fsize - 32)
-
-        wtmData = f.read()
-        f.close()
-    except Exception as e:
-        return(-1, f"Failed to fetch the dataset, dut to {e}") 
-
-    if wtmData == m.digest():
-        return(0, wtmData)
-    else:
-        return(-7, "Sorry, We currently only serivce M5StickV Customers.")
 
 def chkDataset(dirname):  
 
@@ -156,7 +141,7 @@ def chkDataset(dirname):
     
     return (0, NumOfClass)
 
-def runTraining(uuid, datasetDir, validDir, classNum, dropoutValue = 0.2, batch_size = 128, nb_epoch = 20, step_size_train = 80):
+def runTraining(uuid, datasetDir, validDir, classNum, dropoutValue = 0.2, batch_size = 64, nb_epoch = 20, step_size_train = 10):
     config = tf.ConfigProto()
     config.gpu_options.allow_growth=True
     tf.Session(config=config)
@@ -222,7 +207,7 @@ def runTraining(uuid, datasetDir, validDir, classNum, dropoutValue = 0.2, batch_
     mbnetModel=Model(inputs=base_model.input,outputs=output_layer)
         
     mbnetModel.compile(loss='categorical_crossentropy',
-                optimizer='Adam',
+                optimizer=RAdam(),
                 metrics=['accuracy'])
 
     try:
@@ -232,7 +217,7 @@ def runTraining(uuid, datasetDir, validDir, classNum, dropoutValue = 0.2, batch_
 
     mbnetModel.save(f'{localSSDLoc}trained_h5_file/{uuid}_mbnet75.h5')
 
-    converter = tf.lite.TFLiteConverter.from_keras_model_file(f'{localSSDLoc}trained_h5_file/{uuid}_mbnet75.h5')
+    converter = tf.lite.TFLiteConverter.from_keras_model_file(f'{localSSDLoc}trained_h5_file/{uuid}_mbnet75.h5', custom_objects={'RAdam': RAdam})
     tflite_model = converter.convert()
     open(f'{localSSDLoc}trained_tflite_file/{uuid}_mbnet75_quant.tflite', "wb").write(tflite_model)
 
