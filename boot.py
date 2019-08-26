@@ -52,7 +52,7 @@ def findMaxIDinDir(dirname):
                 larNum = currNum
         return larNum
     except:
-        return -1
+        return 0
 
 
 def play_sound(filename):
@@ -134,26 +134,34 @@ try:
         img = sensor.snapshot()
         disp_img=img.copy()
         disp_img.draw_rectangle(0,60,320,1,color=(0,144,255),thickness=10)
-        disp_img.draw_string(50,55,"Train:%03d/120   Class:%02d/10"%(currentImage,currentDirectory),color=(255,255,255),scale=1)
+        disp_img.draw_string(50,55,"Train:%03d/35   Class:%02d/10"%(currentImage,currentDirectory),color=(255,255,255),scale=1)
         lcd.display(disp_img)
 
         if but_a.value() == 0 and isButtonPressedA == 0:
-            play_sound("/sd/kacha.wav")
             if currentImage <= 30 or currentImage > 35:
                 if str(currentDirectory) not in os.listdir("/sd/train"):
                     try:
                         os.mkdir("/sd/train/" + str(currentDirectory))
                     except:
                         pass
-
-                img.save("/sd/train/" + str(currentDirectory) + "/" + str(currentImage) + ".jpg", quality=95)
+                try:
+                    img.save("/sd/train/" + str(currentDirectory) + "/" + str(currentImage) + ".jpg", quality=95)
+                    play_sound("/sd/kacha.wav")
+                except:
+                    lcd.draw_string(lcd.width()//2-124,lcd.height()//2-4, "Error: Cannot Write to SD Card", lcd.WHITE, lcd.RED)
+                    time.sleep(1)
             else:
                 if str(currentDirectory) not in os.listdir("/sd/vaild"):
                     try:
                         os.mkdir("/sd/vaild/" + str(currentDirectory))
                     except:
                         pass
-                img.save("/sd/vaild/" + str(currentDirectory) + "/" + str(currentImage) + ".jpg", quality=95)
+                try:
+                    img.save("/sd/vaild/" + str(currentDirectory) + "/" + str(currentImage) + ".jpg", quality=95)
+                    play_sound("/sd/kacha.wav")
+                except:
+                    lcd.draw_string(lcd.width()//2-124,lcd.height()//2-4, "Error: Cannot Write to SD Card", lcd.WHITE, lcd.RED)
+                    time.sleep(1)
             currentImage = currentImage + 1
             isButtonPressedA = 1
 
