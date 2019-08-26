@@ -49,12 +49,14 @@ import oss2
 import smtplib
 from email.mime.text import MIMEText
 
+#auth = oss2.Auth('Meowmeowmeow', 'Meowmeowmeow')
 auth = oss2.Auth('Meowmeowmeow', 'Meowmeowmeow')
 bucket = oss2.Bucket(auth, 'Meowmeowmeow', 'Meowmeowmeow')
 
 upstreamServerAddress = "Meowmeowmeow"
 upstreamMagic = "Meowmeowmeow"
 
+#aliyunOSSAddress = 'Meowmeowmeow'
 aliyunOSSAddress = 'Meowmeowmeow'
 
 localSSDLoc = 'Meowmeowmeow'
@@ -81,7 +83,7 @@ def chkDataset(dirname):
     listDatasetDir = os.listdir(dirname)
 
     if "train" not in listDatasetDir or ("vaild" not in listDatasetDir and "valid" not in listDatasetDir):
-        return(-8, "train or valid folder not found")
+        return(-8, "Train or valid folder not found. If you are using the M5StickV software, make sure you reach enough image counts of 35.")
 
     if "valid" in listDatasetDir:
         os.rename(f"{dirname}/valid", f"{dirname}/vaild")
@@ -130,7 +132,7 @@ def chkDataset(dirname):
     except Exception as e:
         return(-6, f"Unexpected error happened during checking dataset, {e}")
 
-    if TrainImageNum < NumOfClass * 25:
+    if TrainImageNum < NumOfClass * 10:
         return(-4, f"Lake of Enough Dataset, Only {TrainImageNum} pictures found, but you need {NumOfClass * 50} in total.")
     
     if VaildImageNum < NumOfClass * 5:
@@ -141,19 +143,19 @@ def chkDataset(dirname):
     
     return (0, NumOfClass)
 
-def runTraining(uuid, datasetDir, validDir, classNum, dropoutValue = 0.2, batch_size = 64, nb_epoch = 20, step_size_train = 10):
+def runTraining(uuid, datasetDir, validDir, classNum, dropoutValue = 0.2, batch_size = 64, nb_epoch = 20, step_size_train = 10, alphaVal = 1.0, depthMul = 1):
     config = tf.ConfigProto()
     config.gpu_options.allow_growth=True
     tf.Session(config=config)
 
     imageGen = ImageDataGenerator(
-        rotation_range=20,
-        width_shift_range=0.2,
-        height_shift_range=0.2,
-        zoom_range=0.2,
-        shear_range=0.2,
-        vertical_flip=True,
-        horizontal_flip=True,
+        rotation_range=10,
+        width_shift_range=0.3,
+        height_shift_range=0.3,
+        zoom_range=0.3,
+        shear_range=0.3,
+        vertical_flip=False,
+        horizontal_flip=False,
         rescale=1. / 255)
     
     trainSet=imageGen.flow_from_directory(datasetDir,
@@ -199,7 +201,7 @@ def runTraining(uuid, datasetDir, validDir, classNum, dropoutValue = 0.2, batch_
             if self.stopped_epoch > 0:
                 print('Epoch %05d: early stopping' % (self.stopped_epoch + 1))
 
-    base_model = MobileNet(input_shape=(224, 224, 3), alpha = 0.75,depth_multiplier = 1, dropout = dropoutValue, pooling='avg',include_top = False, weights = "imagenet", classes = classNum)
+    base_model = MobileNet(input_shape=(224, 224, 3), alpha = alphaVal,depth_multiplier = depthMul, dropout = dropoutValue, pooling='avg',include_top = False, weights = "imagenet", classes = classNum)
 
     x = base_model.output
     x = Dropout(dropoutValue, name='dropout')(x)  
@@ -209,22 +211,22 @@ def runTraining(uuid, datasetDir, validDir, classNum, dropoutValue = 0.2, batch_
     mbnetModel.compile(loss='categorical_crossentropy',
                 optimizer=RAdam(),
                 metrics=['accuracy'])
-
+    history = History()
     try:
-        mbnetModel.fit_generator(generator=trainSet,steps_per_epoch=step_size_train,callbacks=[EarlyStoppingAtMinLoss()],epochs=nb_epoch, validation_data=validSet)
+        mbnetModel.fit_generator(generator=trainSet,steps_per_epoch=step_size_train,callbacks=[EarlyStoppingAtMinLoss(), history],epochs=nb_epoch, validation_data=validSet)
     except Exception as e:
         return(-14, f'Unexpected Error Found During Training, {e}')
 
-    mbnetModel.save(f'{localSSDLoc}trained_h5_file/{uuid}_mbnet75.h5')
+    mbnetModel.save(f'{localSSDLoc}trained_h5_file/{uuid}_mbnet10.h5')
 
-    converter = tf.lite.TFLiteConverter.from_keras_model_file(f'{localSSDLoc}trained_h5_file/{uuid}_mbnet75.h5', custom_objects={'RAdam': RAdam})
+    converter = tf.lite.TFLiteConverter.from_keras_model_file(f'{localSSDLoc}trained_h5_file/{uuid}_mbnet10.h5', custom_objects={'RAdam': RAdam})
     tflite_model = converter.convert()
-    open(f'{localSSDLoc}trained_tflite_file/{uuid}_mbnet75_quant.tflite', "wb").write(tflite_model)
+    open(f'{localSSDLoc}trained_tflite_file/{uuid}_mbnet10_quant.tflite', "wb").write(tflite_model)
 
-    subprocess.run([f'{nncaseLoc}/ncc', f'{localSSDLoc}trained_tflite_file/{uuid}_mbnet75_quant.tflite', f'{localSSDLoc}trained_kmodel_file/{uuid}_mbnet75_quant.kmodel', '-i', 'tflite', '-o', 'k210model', '--dataset', validDir])
+    subprocess.run([f'{nncaseLoc}/ncc', f'{localSSDLoc}trained_tflite_file/{uuid}_mbnet10_quant.tflite', f'{localSSDLoc}trained_kmodel_file/{uuid}_mbnet10_quant.kmodel', '-i', 'tflite', '-o', 'k210model', '--dataset', validDir])
 
-    if os.path.isfile(f'{localSSDLoc}trained_kmodel_file/{uuid}_mbnet75_quant.kmodel'):
-        return (0, f'{localSSDLoc}trained_kmodel_file/{uuid}_mbnet75_quant.kmodel')
+    if os.path.isfile(f'{localSSDLoc}trained_kmodel_file/{uuid}_mbnet10_quant.kmodel'):
+        return (0, f'{localSSDLoc}trained_kmodel_file/{uuid}_mbnet10_quant.kmodel', history)
     else:
         return (-16, 'Unexpected Error Found During generating Kendryte k210model.')
 
@@ -239,7 +241,9 @@ def uploadFile(filename):
 def sendErrorEmail(mailaddr, userid, content):
     msg_content = 'Hi!\n\rSorry for that, there is some error happened during the training process. '\
         '\nWe attached the reason below, if you have any questions, welcome to report to us through Twitter, Facebook, or Forum.\n'\
-        f'\n\rUSERID: {userid}\nCONTENT: {content}'   
+        'Or, check out our docs here: https://docs.m5stack.com/#/en/related_documents/v-training'\
+        f'\n\rUSERID: {userid}\nCONTENT: {content}'\
+
     message = MIMEText(msg_content, 'plain')
 
     message['From'] = f'V-Trainer <{senderAddr}>'
@@ -257,8 +261,13 @@ def sendErrorEmail(mailaddr, userid, content):
                     msg_full)
     server.quit()
 
-def sendSuccessEmail(mailaddr, userid, ossAddr):
-    msg_content = f'Hi!\n\rYour training request have been successfully processed, you can download the kmodel & sample program files here: \n\r{ossAddr}'   
+def sendSuccessEmail(mailaddr, userid, ossAddr, history):
+    msg_content = f'Hi!\n\rYour training request have been successfully processed, you can download the kmodel & sample program files here: \r{ossAddr}'\
+            f"\n\rYour Model Parameters:\nFinal Loss: {(history.history['loss'])[-1]}\nFinal Accurancy: {(history.history['acc'])[-1]}"\
+            f"\nFinal Validation Loss: {(history.history['val_loss'])[-1]}\nFinal Validation Accurancy: {(history.history['val_acc'])[-1]}\nModel: Mobilenet V1 Alpha: 1.0 Depth: 1"
+    if (history.history['val_acc'])[-1] < 0.75:
+        msg_content = msg_content + "\n Your validation Accurancy seems too low, this may caused by bad dataset(the images you providing do not have enough similarity or just too less images)"\
+    " or the optimzer do not converge. Under both circumstance, you can just put more images inside, and take another try!"
     message = MIMEText(msg_content, 'plain')
 
     message['From'] = f'V-Trainer <{senderAddr}>'
@@ -325,11 +334,13 @@ while 1:
             numOfClass = ret[1]
 
             print("[INFO]", "Start Runiing Training")
-            ret = runTraining(jsonRequest['id'], f"{datasetDir}/train", f"{datasetDir}/vaild", numOfClass, 0.02)
+            ret = runTraining(jsonRequest['id'], f"{datasetDir}/train", f"{datasetDir}/vaild", numOfClass, 1/numOfClass)
             if ret[0] != 0:
                 print("[FATAL]", ret[1])
                 sendErrorEmail(jsonRequest['email'], jsonRequest['id'], ret[1])
                 continue
+            
+            history = ret[2]
 
             print("[INFO]", "Start Creating Custom Bootfile.")
             customBootFile = bootFileContent
@@ -366,7 +377,7 @@ while 1:
                 continue
             
             print("[INFO]", "Start Sending Success Email, address:", ret[1])
-            sendSuccessEmail(jsonRequest['email'], jsonRequest['id'], ret[1])
+            sendSuccessEmail(jsonRequest['email'], jsonRequest['id'], ret[1], history)
 
     except Exception as e:
         print(e)
