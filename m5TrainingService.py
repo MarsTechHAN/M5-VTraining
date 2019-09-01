@@ -1,4 +1,4 @@
-import os
+import os,sys
 import json
 import urllib.request
 import zipfile
@@ -9,16 +9,23 @@ import time
 import zipfile
 
 from PIL import Image
+import matplotlib.pyplot as plt
 
+from sklearn.metrics import confusion_matrix
+import seaborn as sns
+
+os.environ['CUDA_VISIBLE_DEVICES'] = sys.argv[1]
 os.environ["TF_KERAS"] = "1"
 
+from vis.utils import utils
+from vis.visualization import visualize_cam, overlay
 
 import tensorflow as tf
 import numpy as np
 
-from tensorflow.python.keras import backend as K
+from tensorflow.python.keras import backend as K, Sequential
 from tensorflow.python.keras.layers.core import Dense, Activation
-from tensorflow.python.keras.layers import ZeroPadding2D
+from tensorflow.python.keras.layers import ZeroPadding2D, GlobalAveragePooling2D
 from tensorflow.python.keras.optimizers import Adam
 from tensorflow.python.keras.metrics import categorical_crossentropy
 from tensorflow.python.keras.preprocessing.image import ImageDataGenerator
@@ -36,6 +43,7 @@ from tensorflow.python.keras import backend as K
 from tensorflow.python.keras import utils
 from tensorflow.python.keras.datasets.cifar import load_batch
 from tensorflow.python.keras.utils.data_utils import get_file
+from tensorflow.python.keras.models import load_model
 
 from tensorflow.python.keras import optimizers
 from tensorflow.python.keras.utils import multi_gpu_model
@@ -47,25 +55,27 @@ from keras_radam import RAdam
 import oss2
 
 import smtplib
+from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+from email.mime.image import MIMEImage
 
-#auth = oss2.Auth('Meowmeowmeow', 'Meowmeowmeow')
-auth = oss2.Auth('Meowmeowmeow', 'Meowmeowmeow')
-bucket = oss2.Bucket(auth, 'Meowmeowmeow', 'Meowmeowmeow')
+auth = oss2.Auth('MeowMeowMeow', 'MeowMeowMeow')
+bucket = oss2.Bucket(auth, 'MeowMeowMeow', 'MeowMeowMeow')
 
-upstreamServerAddress = "Meowmeowmeow"
-upstreamMagic = "Meowmeowmeow"
+upstreamServerAddress = "MeowMeowMeow"
+upstreamMagic = "MeowMeowMeow"
 
-#aliyunOSSAddress = 'Meowmeowmeow'
-aliyunOSSAddress = 'Meowmeowmeow'
+aliyunOSSAddress = 'MeowMeowMeow'
 
-localSSDLoc = 'Meowmeowmeow'
-nncaseLoc = 'Meowmeowmeow'
+localSSDLoc = 'MeowMeowMeow'
+nncaseLoc = f'MeowMeowMeow'
 
-senderAddr = "Meowmeowmeow"
-senderPass = "Meowmeowmeow"
+senderAddr = "MeowMeowMeow"
+senderPass = "MeowMeowMeow"
 
-bootFileName = "Meowmeowmeow"
+bootFileName = "MeowMeowMeow"
+
+completedTaskHeader = ""
 
 def getDataset(address, uuid):
     try:
@@ -73,12 +83,13 @@ def getDataset(address, uuid):
 
         with zipfile.ZipFile(f"{localSSDLoc}dataset/{uuid}_dataset.zip", 'r') as zip_ref:
             zip_ref.extractall(f"{localSSDLoc}dataset_tmp/{uuid}_dataset")
-        
+
         return(0, f"{localSSDLoc}dataset_tmp/{uuid}_dataset")
     except Exception as e:
         return(-1, f"Failed to fetch the dataset, dut to {e}")
 
-def chkDataset(dirname):  
+
+def chkDataset(dirname):
 
     listDatasetDir = os.listdir(dirname)
 
@@ -90,17 +101,17 @@ def chkDataset(dirname):
 
     TrainImageNum = 0
     VaildImageNum = 0
-    
+
     NumOfClass = len(os.listdir(os.path.join(dirname, "train")))
     NumOfClassVaild = len(os.listdir(os.path.join(dirname, "vaild")))
-    
+
     if NumOfClass != NumOfClassVaild:
         return(-11, "Number of Classes presented in Train and Vaild dataset is not equal.")
-    
+
     print("[INFO]", f"Total {NumOfClass} Classes Found")
 
-    if NumOfClass < 3:
-        return(-16, "Number of Classes should larger or equal to three.")
+    if NumOfClass < 2:
+        return(-16, "Number of Classes should larger or equal to two.")
 
     for file in listDatasetDir:
         if(os.path.splitext(file)[1] == '.dpf'):
@@ -118,7 +129,7 @@ def chkDataset(dirname):
                     TrainImageNum = TrainImageNum + 1
                 else:
                     return(-3, f"Unexpected File Present: {file}")
-        
+
         for dirpath, _ , filenames in os.walk(f"{dirname}/vaild", topdown=False):
             for file in filenames:
                 if(os.path.splitext(file)[1] == '.jpg'):
@@ -134,22 +145,22 @@ def chkDataset(dirname):
 
     if TrainImageNum < NumOfClass * 10:
         return(-4, f"Lake of Enough Dataset, Only {TrainImageNum} pictures found, but you need {NumOfClass * 50} in total.")
-    
+
     if VaildImageNum < NumOfClass * 5:
         return(-4, f"Lake of Enough Dataset, Only {VaildImageNum} pictures found, but you need {VaildImageNum * 10} in total.")
-    
+
     #if isConfigFilePresent == 0: #Not enable isConfigFilePresent Yet
     #    return(-5, "Unable to find dpf dataset description file.")
-    
+
     return (0, NumOfClass)
 
-def runTraining(uuid, datasetDir, validDir, classNum, dropoutValue = 0.2, batch_size = 64, nb_epoch = 20, step_size_train = 10, alphaVal = 1.0, depthMul = 1):
-    config = tf.ConfigProto()
-    config.gpu_options.allow_growth=True
-    tf.Session(config=config)
+def runTraining(uuid, datasetDir, validDir, classNum, dropoutValue = 0.2, batch_size = 128, nb_epoch = 20, step_size_train = 10, alphaVal = 1.0, depthMul = 1):
+    #config = tf.ConfigProto()
+    #config.gpu_options.allow_growth=True
+    #tf.Session(config=config)
 
     imageGen = ImageDataGenerator(
-        rotation_range=10,
+        rotation_range=30,
         width_shift_range=0.3,
         height_shift_range=0.3,
         zoom_range=0.3,
@@ -157,20 +168,23 @@ def runTraining(uuid, datasetDir, validDir, classNum, dropoutValue = 0.2, batch_
         vertical_flip=False,
         horizontal_flip=False,
         rescale=1. / 255)
-    
+
     trainSet=imageGen.flow_from_directory(datasetDir,
                                                     target_size=(224,224),
                                                     color_mode='rgb',
                                                     batch_size=batch_size,
                                                     class_mode='categorical', shuffle=True)
-    validSet=imageGen.flow_from_directory(validDir,  
+    validSet=imageGen.flow_from_directory(validDir,
                                                     target_size=(224,224),
                                                     color_mode='rgb',
-                                                    batch_size=batch_size,
+                                                    batch_size=32,
                                                     class_mode='categorical', shuffle=True)
 
+    def loss_softmax_cross_entropy_with_logits_v2(correct, predicted):
+        return tf.nn.softmax_cross_entropy_with_logits_v2(labels=correct,logits=predicted)
+
     class EarlyStoppingAtMinLoss(tf.keras.callbacks.Callback):
-        def __init__(self, patience=0):
+        def __init__(self, patience=3):
             super(EarlyStoppingAtMinLoss, self).__init__()
             self.patience = patience
             self.best_weights = None
@@ -178,13 +192,15 @@ def runTraining(uuid, datasetDir, validDir, classNum, dropoutValue = 0.2, batch_
         def on_train_begin(self, logs=None):
             self.wait = 0
             self.stopped_epoch = 0
-            self.best = np.Inf 
+            self.best = np.Inf
             self.last_acc = 0
+            self.atleastepoc = 0
 
         def on_epoch_end(self, epoch, logs=None):
             current = logs.get('val_loss')
             val_acc = logs.get('val_acc')
-            if np.less(current, self.best) or self.last_acc < 0.8:
+            self.atleastepoc = self.atleastepoc + 1
+            if np.less(current, self.best) or self.last_acc < 0.85 or self.atleastepoc < 30:
                 self.best = current
                 self.wait = 0
                 self.last_acc = val_acc
@@ -203,32 +219,94 @@ def runTraining(uuid, datasetDir, validDir, classNum, dropoutValue = 0.2, batch_
 
     base_model = MobileNet(input_shape=(224, 224, 3), alpha = alphaVal,depth_multiplier = depthMul, dropout = dropoutValue, pooling='avg',include_top = False, weights = "imagenet", classes = classNum)
 
-    x = base_model.output
-    x = Dropout(dropoutValue, name='dropout')(x)  
-    output_layer = Dense(classNum, activation='softmax')(x)
-    mbnetModel=Model(inputs=base_model.input,outputs=output_layer)
-        
-    mbnetModel.compile(loss='categorical_crossentropy',
+    mbnetModel = Sequential([
+        base_model,
+        Dropout(dropoutValue, name='dropout'),
+        Dense(classNum, activation='softmax')
+    ])
+
+
+    if classNum == 2:
+        mbnetModel.compile(loss='binary_crossentropy',
                 optimizer=RAdam(),
                 metrics=['accuracy'])
+    else:
+        mbnetModel.compile(loss=loss_softmax_cross_entropy_with_logits_v2,
+                optimizer=RAdam(),
+                metrics=['accuracy'])
+
     history = History()
+
     try:
-        mbnetModel.fit_generator(generator=trainSet,steps_per_epoch=step_size_train,callbacks=[EarlyStoppingAtMinLoss(), history],epochs=nb_epoch, validation_data=validSet)
+        mbnetModel.fit_generator(generator=trainSet,steps_per_epoch=step_size_train,callbacks=[EarlyStoppingAtMinLoss(), history],epochs=50, validation_data=validSet)
     except Exception as e:
-        return(-14, f'Unexpected Error Found During Training, {e}')
+        return(-14, f'Unexpected Error Found During Triaining, {e}')
 
     mbnetModel.save(f'{localSSDLoc}trained_h5_file/{uuid}_mbnet10.h5')
 
-    converter = tf.lite.TFLiteConverter.from_keras_model_file(f'{localSSDLoc}trained_h5_file/{uuid}_mbnet10.h5', custom_objects={'RAdam': RAdam})
+    converter = tf.lite.TFLiteConverter.from_keras_model_file(f'{localSSDLoc}trained_h5_file/{uuid}_mbnet10.h5', custom_objects={'RAdam': RAdam, 'loss_softmax_cross_entropy_with_logits_v2':loss_softmax_cross_entropy_with_logits_v2})
     tflite_model = converter.convert()
     open(f'{localSSDLoc}trained_tflite_file/{uuid}_mbnet10_quant.tflite', "wb").write(tflite_model)
 
     subprocess.run([f'{nncaseLoc}/ncc', f'{localSSDLoc}trained_tflite_file/{uuid}_mbnet10_quant.tflite', f'{localSSDLoc}trained_kmodel_file/{uuid}_mbnet10_quant.kmodel', '-i', 'tflite', '-o', 'k210model', '--dataset', validDir])
 
     if os.path.isfile(f'{localSSDLoc}trained_kmodel_file/{uuid}_mbnet10_quant.kmodel'):
-        return (0, f'{localSSDLoc}trained_kmodel_file/{uuid}_mbnet10_quant.kmodel', history)
+        return (0, f'{localSSDLoc}trained_kmodel_file/{uuid}_mbnet10_quant.kmodel', history, validSet, mbnetModel)
     else:
         return (-16, 'Unexpected Error Found During generating Kendryte k210model.')
+
+def packImages(uuid, history, validSet, mbnetModel):
+    acc = history.history['acc']
+    val_acc = history.history['val_acc']
+    loss = history.history['loss']
+    val_loss = history.history['val_loss']
+
+    epochs = range(len(acc))
+
+    plt.figure()
+    plt.ylim(0, 1)
+    plt.plot(epochs, acc, 'bo', label='Training acc')
+    plt.plot(epochs, val_acc, 'b', label='Validation acc')
+    plt.autoscale()
+    plt.title('Training and validation accuracy')
+    plt.legend()
+
+    plt.savefig(f'{localSSDLoc}imageAssest/{uuid}_acc_graph.png')
+    plt.figure()
+    plt.plot(epochs, loss, 'bo', label='Training loss')
+    plt.plot(epochs, val_loss, 'b', label='Validation loss')
+    plt.autoscale()
+    plt.title('Training and validation loss')
+    plt.legend()
+    plt.savefig(f'{localSSDLoc}imageAssest/{uuid}_loss_graph.png')
+
+    def loss_softmax_cross_entropy_with_logits_v2(correct, predicted):
+        return tf.nn.softmax_cross_entropy_with_logits_v2(labels=correct,logits=predicted)
+
+    mbnetModel = load_model(f'{localSSDLoc}trained_h5_file/{uuid}_mbnet10.h5', custom_objects={'RAdam': RAdam, 'loss_softmax_cross_entropy_with_logits_v2':loss_softmax_cross_entropy_with_logits_v2})
+    validSet.reset()
+    validSet.shuffle = False
+    validSet.batch_size = 1
+    predicted = mbnetModel.predict_generator(validSet, steps=validSet.n)
+    predicted_classes = np.argmax(predicted, axis=-1)
+
+    cm = confusion_matrix(validSet.classes, predicted_classes)
+    cm = cm.astype('float') / cm.sum(axis=1)[:, np.newaxis]
+
+    plt.figure(figsize=(12, 9))
+
+    sns.heatmap(cm, annot=True, square=True, cmap=plt.cm.Blues,
+            xticklabels=validSet.class_indices,
+            yticklabels=validSet.class_indices)
+
+    plt.title("Confusion Matrix")
+    plt.ylabel('True label')
+    plt.xlabel('Predicted label')
+
+    plt.autoscale()
+
+    plt.savefig(f'{localSSDLoc}imageAssest/{uuid}_conf_matrix.png')
+
 
 def uploadFile(filename):
     try:
@@ -253,8 +331,8 @@ def sendErrorEmail(mailaddr, userid, content):
     msg_full = message.as_string()
 
     server = smtplib.SMTP_SSL()
-    server.set_debuglevel(1)
-    server.connect(host='smtp.qiye.aliyun.com',port=465)  
+    #server.set_debuglevel(1)
+    server.connect(host='smtp.qiye.aliyun.com',port=465)
     server.login(senderAddr, senderPass)
     server.sendmail(senderAddr,
                     [mailaddr],
@@ -262,27 +340,49 @@ def sendErrorEmail(mailaddr, userid, content):
     server.quit()
 
 def sendSuccessEmail(mailaddr, userid, ossAddr, history):
-    msg_content = f'Hi!\n\rYour training request have been successfully processed, you can download the kmodel & sample program files here: \r{ossAddr}'\
-            f"\n\rYour Model Parameters:\nFinal Loss: {(history.history['loss'])[-1]}\nFinal Accurancy: {(history.history['acc'])[-1]}"\
+    msgRoot = MIMEMultipart('related')
+    msgRoot['From'] = f'V-Trainer <{senderAddr}>'
+    msgRoot['To'] = f'{mailaddr} <{mailaddr}>'
+    msgRoot['Subject'] = f'[V-Trainer] {userid} Online Training Request Finished'
+
+    msgAlternative = MIMEMultipart('alternative')
+    msgRoot.attach(msgAlternative)
+
+    msg_content = f'Hi!\n\nYour training request have been successfully processed, you can download the kmodel & sample program files here: \n{ossAddr}'\
+            f"\n\nYour Model Parameters:\nFinal Loss: {(history.history['loss'])[-1]}\nFinal Accurancy: {(history.history['acc'])[-1]}"\
             f"\nFinal Validation Loss: {(history.history['val_loss'])[-1]}\nFinal Validation Accurancy: {(history.history['val_acc'])[-1]}\nModel: Mobilenet V1 Alpha: 1.0 Depth: 1"
     if (history.history['val_acc'])[-1] < 0.75:
         msg_content = msg_content + "\n Your validation Accurancy seems too low, this may caused by bad dataset(the images you providing do not have enough similarity or just too less images)"\
     " or the optimzer do not converge. Under both circumstance, you can just put more images inside, and take another try!"
-    message = MIMEText(msg_content, 'plain')
 
-    message['From'] = f'V-Trainer <{senderAddr}>'
-    message['To'] = f'{userid} <{mailaddr}>'
-    message['Subject'] = f'[V-Trainer] {userid} Online Training Request Finished'
+    msgText = MIMEText(msg_content, 'plain')
+    msgAlternative.attach(msgText)
+   # '''
+    msgText = MIMEText(msg_content.replace("\n", "<br>") + '<br><img src="cid:acc_graph"><br><img src="cid:loss_graph"><br><img src="cid:conf_matrix"><br>', 'html')
+    msgAlternative.attach(msgText)
 
-    msg_full = message.as_string()
+    with open(f'{localSSDLoc}imageAssest/{userid}_loss_graph.png', 'rb') as imageFile:
+        msgImage = MIMEImage(imageFile.read())
+        msgImage.add_header('Content-ID', '<loss_graph>')
+        msgRoot.attach(msgImage)
 
+    with open(f'{localSSDLoc}imageAssest/{userid}_acc_graph.png', 'rb') as imageFile:
+        msgImage = MIMEImage(imageFile.read())
+        msgImage.add_header('Content-ID', '<acc_graph>')
+        msgRoot.attach(msgImage)
+
+    with open(f'{localSSDLoc}imageAssest/{userid}_conf_matrix.png', 'rb') as imageFile:
+        msgImage = MIMEImage(imageFile.read())
+        msgImage.add_header('Content-ID', '<conf_matrix>')
+        msgRoot.attach(msgImage)
+    #'''
     server = smtplib.SMTP_SSL()
     server.set_debuglevel(1)
-    server.connect(host='smtp.qiye.aliyun.com',port=465)  
+    server.connect(host='smtp.qiye.aliyun.com',port=465)
     server.login(senderAddr, senderPass)
     server.sendmail(senderAddr,
                     [mailaddr],
-                    msg_full)
+                    msgRoot.as_string())
     server.quit()
 
 bootFileContent = open(bootFileName, "r").read()
@@ -300,11 +400,19 @@ while 1:
         #print("===================REV REQUEST=====================")
 
         try:
+            if completedTaskHeader != "":
+                print(">>> Req With TaskHeader: " + completedTaskHeader)
             req = urllib.request.Request(upstreamServerAddress)
             req.add_header('Basic', upstreamMagic)
+            req.add_header('X-Complete-Task', completedTaskHeader)
             r = urllib.request.urlopen(req).read()
 
+            completedTaskHeader = ""
+
             jsonRequest = json.loads(r.decode('utf-8'))
+
+            userid = jsonRequest['id']
+
         except:
             print("[FATAL]", "Failed to fetch request from server")
             continue
@@ -322,15 +430,17 @@ while 1:
             if ret[0] != 0:
                 print("[FATAL]", ret[1])
                 sendErrorEmail(jsonRequest['email'], jsonRequest['id'], ret[1])
+                completedTaskHeader = str(userid)
                 continue
-            
+
             print("[INFO]", "Start Checking Dataset, dirname: ", ret[1])
             ret = chkDataset(ret[1])
             if ret[0] != 0:
                 print("[FATAL]", ret[1])
                 sendErrorEmail(jsonRequest['email'], jsonRequest['id'], ret[1])
+                completedTaskHeader = str(userid)
                 continue
-            
+
             numOfClass = ret[1]
 
             print("[INFO]", "Start Runiing Training")
@@ -338,10 +448,19 @@ while 1:
             if ret[0] != 0:
                 print("[FATAL]", ret[1])
                 sendErrorEmail(jsonRequest['email'], jsonRequest['id'], ret[1])
+                completedTaskHeader = str(userid)
                 continue
-            
-            history = ret[2]
 
+            history = ret[2]
+           # '''
+            try:
+                packImages(jsonRequest['id'], history, ret[3], ret[4])
+            except Exception as e:
+                print("[FATAL]", "Unable to generate Images," + str(e))
+                sendErrorEmail(jsonRequest['email'], jsonRequest['id'], "Unable to generate Images," + str(e))
+                completedTaskHeader = str(userid)
+                continue
+            #'''
             print("[INFO]", "Start Creating Custom Bootfile.")
             customBootFile = bootFileContent
             customBootFile = customBootFile.replace("{MODEL_NAME}", f"{os.path.basename(ret[1])}")
@@ -349,13 +468,13 @@ while 1:
 
             for i in range(1, numOfClass):
                 labelsStr = labelsStr + f"\"{i}\","
-            labelsStr = labelsStr + f"\"{numOfClass}\"" 
+            labelsStr = labelsStr + f"\"{numOfClass}\""
 
             customBootFile = customBootFile.replace("{MODEL_LABELS}", labelsStr)
 
             os.mkdir(f"{localSSDLoc}custom_bootfile/{jsonRequest['id']}")
             open(f"{localSSDLoc}custom_bootfile/{jsonRequest['id']}/boot.py", "w+").write(customBootFile)
-            
+
             userid = jsonRequest['id']
 
             vtrainer_output = f'{localSSDLoc}output_file/{str(uuid.uuid4())}_{userid}_vtrainer.zip'
@@ -374,12 +493,17 @@ while 1:
             if ret[0] != 0:
                 print("[FATAL]", ret[1])
                 sendErrorEmail(jsonRequest['email'], jsonRequest['id'], ret[1])
+                completedTaskHeader = str(userid)
                 continue
-            
+
             print("[INFO]", "Start Sending Success Email, address:", ret[1])
             sendSuccessEmail(jsonRequest['email'], jsonRequest['id'], ret[1], history)
+            completedTaskHeader = str(userid)
+
+
 
     except Exception as e:
+        completedTaskHeader = ""
         print(e)
         time.sleep(1)
         pass
